@@ -117,9 +117,9 @@ export default function BrowseJobsPage() {
                 <Button
                   variant="primary"
                   onClick={() => handleApply(job.id)}
-                  disabled={applyingId === job.id}
+                  isLoading={applyingId === job.id}
                 >
-                  {applyingId === job.id ? 'Applying...' : 'Apply'}
+                  Apply
                 </Button>
               </div>
             </Card>

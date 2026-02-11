@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Shield, UserPlus } from 'lucide-react';
@@ -9,7 +9,7 @@ import { Button, Input, Card } from '@/components/ui';
 import { authService } from '@/services/api';
 import { setAuth } from '@/lib/auth';
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [firstName, setFirstName] = useState('');
@@ -181,5 +181,13 @@ export default function RegisterPage() {
         </Card>
       </Container>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <RegisterForm />
+    </Suspense>
   );
 }

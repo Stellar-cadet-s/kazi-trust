@@ -1,11 +1,12 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Briefcase, BookOpen, LogOut } from 'lucide-react';
+import { LayoutDashboard, Briefcase, BookOpen, LogOut, User } from 'lucide-react';
 import { Sidebar } from '@/components/layout';
 
 const workerNav = [
   { href: '/worker/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
   { href: '/worker/browse', label: 'Browse Jobs', icon: <Briefcase size={20} /> },
+  { href: '/worker/profile', label: 'My Profile', icon: <User size={20} /> },
   { href: '/worker/rights', label: 'Know Your Rights', icon: <BookOpen size={20} /> },
 ];
 

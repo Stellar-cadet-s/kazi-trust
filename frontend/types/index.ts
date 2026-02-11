@@ -7,6 +7,11 @@ export interface User {
   first_name: string;
   last_name: string;
   user_type: 'employer' | 'employee';
+  location?: string;
+  bio?: string;
+  skills?: string;
+  experience?: string;
+  hourly_rate?: number;
 }
 
 export interface Worker extends User {

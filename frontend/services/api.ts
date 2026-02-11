@@ -29,8 +29,9 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit & { skipAuth?
   }
 
   if (!response.ok) {
-    const err = (data as { detail?: string; [k: string]: unknown }) || {};
-    throw new Error(err.detail || err.error || (typeof err === 'object' && err !== null ? JSON.stringify(err) : text || 'Request failed'));
+    const err = (data as { detail?: string; error?: string; [k: string]: unknown }) || {};
+    const errorMsg = err.detail || err.error || (typeof err === 'object' && err !== null ? JSON.stringify(err) : text || 'Request failed');
+    throw new Error(errorMsg);
   }
 
   return data as T;
