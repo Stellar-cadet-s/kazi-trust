@@ -1,0 +1,51 @@
+graph TB
+    subgraph "Frontend - Next.js"
+        UI[User Interface]
+        Components[Reusable Components]
+        Services[API Services]
+    end
+
+    subgraph "Backend - Django REST"
+        API[REST API]
+        Auth[Authentication]
+        Business[Business Logic]
+    end
+
+    subgraph "Escrow Service"
+        Escrow[Escrow Manager]
+        Stellar[Stellar SDK]
+    end
+
+    subgraph "Blockchain"
+        StellarNet[Stellar Network]
+    end
+
+    subgraph "Database"
+        DB[(PostgreSQL)]
+    end
+
+    UI --> Components
+    Components --> Services
+    Services -->|HTTP/JSON| API
+    
+    API --> Auth
+    API --> Business
+    Business --> Escrow
+    
+    Escrow --> Stellar
+    Stellar -->|Transactions| StellarNet
+    
+    Business --> DB
+    Auth --> DB
+    
+    StellarNet -->|Confirmation| Stellar
+    Stellar -->|Status Update| Business
+    Business -->|Response| API
+    API -->|JSON| Services
+    Services --> UI
+
+    style UI fill:#3b82f6
+    style API fill:#10b981
+    style Escrow fill:#f59e0b
+    style StellarNet fill:#8b5cf6
+    style DB fill:#ef4444
