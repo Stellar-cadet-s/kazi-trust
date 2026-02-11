@@ -1,2 +1,11 @@
 venv
 
+venv/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Stellar directories
+stellar_escrow/
