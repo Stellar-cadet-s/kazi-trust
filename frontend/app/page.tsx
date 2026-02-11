@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import { Shield, CheckCircle, Zap, ArrowRight } from 'lucide-react';
 import { Navbar, Container } from '@/components/layout';
@@ -20,12 +22,12 @@ export default function HomePage() {
             </p>
             
             <div className="flex gap-4 justify-center">
-              <Link href="/auth/register?type=employer">
-                <Button variant="primary">Continue as Employer</Button>
-              </Link>
-              <Link href="/auth/register?type=worker">
-                <Button variant="secondary">Continue as Worker</Button>
-              </Link>
+              <Button variant="primary" onClick={() => window.location.href = '/auth/register?type=employer'}>
+                Continue as Employer
+              </Button>
+              <Button variant="secondary" onClick={() => window.location.href = '/auth/register?type=worker'}>
+                Continue as Worker
+              </Button>
             </div>
           </div>
 
