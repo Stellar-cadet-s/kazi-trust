@@ -156,7 +156,7 @@ class USSDHandler:
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
-                user_type='client' if user_type == '1' else 'employee'
+                user_type='employer' if user_type == '1' else 'employee'
             )
             
             # Generate USSD PIN
@@ -214,7 +214,7 @@ User Type: {user.user_type}"""
     @staticmethod
     def post_login_menu(user):
         """Display menu after successful login"""
-        if user.user_type == 'client':
+        if user.user_type == 'employer':
             return USSDHandler.client_menu()
         elif user.user_type == 'employee':
             return USSDHandler.employee_menu()
