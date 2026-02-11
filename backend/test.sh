@@ -64,11 +64,11 @@ print_test "Register employer with phone, password, email"
 RESP=$(curl_silent -X POST "$API_URL/auth/register/" \
     -H "Content-Type: application/json" \
     -d '{
-        "phone_number": "254700111001",
+        "phone_number": "254700111081",
         "password": "EmployerPass123!",
-        "email": "employer@kazi-trust.test",
-        "first_name": "Test",
-        "last_name": "Employer",
+        "email": "employer@kazi-tr0st.test",
+        "first_name": "Peter",
+        "last_name": "Ikinya",
         "user_type": "employer"
     }')
 
