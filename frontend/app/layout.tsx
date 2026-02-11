@@ -8,8 +8,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TrustWork - Building Trust in Domestic Work",
-  description: "Secure contracts, verified workers, protected payments via escrow",
+  title: "Kazi Trust - Building Trust in Domestic Work",
+  description: "Secure contracts, verified workers, protected payments via Stellar blockchain escrow. Empowering Kenya's domestic workforce.",
 };
 
 export default function RootLayout({

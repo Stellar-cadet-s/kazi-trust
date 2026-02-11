@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { Shield, Sparkles } from 'lucide-react';
 import { Container } from '@/components/layout';
 import { Button, Input, Card } from '@/components/ui';
 import { authService } from '@/services/api';
@@ -13,12 +14,12 @@ export default function LoginPage() {
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
+    setIsLoading(true);
     try {
       const res = await authService.login(emailOrPhone.trim(), password);
       setAuth(res.access, res.user);
@@ -30,23 +31,47 @@ export default function LoginPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
-      <Container className="max-w-md">
+    <div className="min-h-screen flex items-center justify-center py-12 relative overflow-hidden">
+      {/* Animated Background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-[#7B3FF2]/10 via-[#00A8E8]/10 to-[#006B3F]/10" />
+      <div className="absolute top-20 right-20 w-96 h-96 bg-[#7B3FF2]/20 rounded-full blur-3xl animate-pulse" />
+      <div className="absolute bottom-20 left-20 w-96 h-96 bg-[#00A8E8]/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+      
+      <Container className="max-w-md relative z-10">
         <div className="text-center mb-8">
-          <Link href="/" className="text-3xl font-bold text-blue-600">
-            TrustWork
+          <Link href="/" className="inline-flex items-center gap-3 group mb-6">
+            <div className="relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-[#7B3FF2] to-[#00A8E8] rounded-lg blur-lg opacity-50 group-hover:opacity-75 transition-opacity" />
+              <div className="relative bg-gradient-to-r from-[#7B3FF2] to-[#00A8E8] p-3 rounded-lg">
+                <Shield className="text-white" size={32} />
+              </div>
+            </div>
+            <div className="text-left">
+              <span className="text-3xl font-bold bg-gradient-to-r from-[#7B3FF2] via-[#00A8E8] to-[#006B3F] bg-clip-text text-transparent">
+                Kazi Trust
+              </span>
+              <p className="text-xs text-gray-500">Powered by Stellar</p>
+            </div>
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-6">Welcome back</h1>
-          <p className="text-gray-600 mt-2">Sign in with email or phone number</p>
+          
+          <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-sm px-4 py-2 rounded-full mb-4 shadow-lg">
+            <Sparkles className="text-[#FFB81C]" size={16} />
+            <span className="text-sm font-semibold bg-gradient-to-r from-[#7B3FF2] to-[#00A8E8] bg-clip-text text-transparent">
+              Secure Login
+            </span>
+          </div>
+          
+          <h1 className="text-3xl font-bold text-gray-900 mt-6">Welcome back</h1>
+          <p className="text-gray-600 mt-2">Sign in to your account</p>
         </div>
 
-        <Card>
-          <form className="space-y-4" onSubmit={handleSubmit}>
+        <Card gradient hover>
+          <form className="space-y-6" onSubmit={handleSubmit}>
             <Input
               type="text"
               label="Email or phone number"
@@ -63,15 +88,22 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
             />
+            
             {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign In'}
+            
+            <Button 
+              type="submit" 
+              variant="stellar" 
+              className="w-full"
+              isLoading={isLoading}
+            >
+              Sign In
             </Button>
           </form>
 
           <p className="text-center text-gray-600 mt-6">
             Don&apos;t have an account?{' '}
-            <Link href="/auth/register" className="text-blue-600 hover:underline">
+            <Link href="/auth/register" className="font-semibold bg-gradient-to-r from-[#7B3FF2] to-[#00A8E8] bg-clip-text text-transparent hover:opacity-80 transition-opacity">
               Sign up
             </Link>
           </p>

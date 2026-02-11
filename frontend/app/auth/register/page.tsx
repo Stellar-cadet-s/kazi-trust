@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Shield, UserPlus } from 'lucide-react';
 import { Container } from '@/components/layout';
 import { Button, Input, Card } from '@/components/ui';
 import { authService } from '@/services/api';
@@ -10,15 +11,15 @@ import { setAuth } from '@/lib/auth';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const searchParams = useSearchParams();
   const [role, setRole] = useState<'employer' | 'employee'>('employer');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const type = searchParams.get('type');
@@ -29,7 +30,7 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
+    setIsLoading(true);
     try {
       const phoneNumber = phone.replace(/\s/g, '').replace(/^0/, '254');
       const res = await authService.register({
@@ -49,23 +50,47 @@ export default function RegisterPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
-      <Container className="max-w-md">
+    <div className="min-h-screen flex items-center justify-center py-12 relative overflow-hidden">
+      {/* Animated Background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-[#006B3F]/10 via-[#00A8E8]/10 to-[#7B3FF2]/10" />
+      <div className="absolute top-10 left-10 w-96 h-96 bg-[#006B3F]/20 rounded-full blur-3xl animate-pulse" />
+      <div className="absolute bottom-10 right-10 w-96 h-96 bg-[#7B3FF2]/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1.5s' }} />
+      
+      <Container className="max-w-md relative z-10">
         <div className="text-center mb-8">
-          <Link href="/" className="text-3xl font-bold text-blue-600">
-            TrustWork
+          <Link href="/" className="inline-flex items-center gap-3 group mb-6">
+            <div className="relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-[#006B3F] to-[#00A8E8] rounded-lg blur-lg opacity-50 group-hover:opacity-75 transition-opacity" />
+              <div className="relative bg-gradient-to-r from-[#006B3F] to-[#00A8E8] p-3 rounded-lg">
+                <Shield className="text-white" size={32} />
+              </div>
+            </div>
+            <div className="text-left">
+              <span className="text-3xl font-bold bg-gradient-to-r from-[#7B3FF2] via-[#00A8E8] to-[#006B3F] bg-clip-text text-transparent">
+                Kazi Trust
+              </span>
+              <p className="text-xs text-gray-500">Powered by Stellar</p>
+            </div>
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-6">Create account</h1>
-          <p className="text-gray-600 mt-2">Join TrustWork today</p>
+          
+          <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-sm px-4 py-2 rounded-full mb-4 shadow-lg">
+            <UserPlus className="text-[#006B3F]" size={16} />
+            <span className="text-sm font-semibold bg-gradient-to-r from-[#006B3F] to-[#00A8E8] bg-clip-text text-transparent">
+              Join Kazi Trust
+            </span>
+          </div>
+          
+          <h1 className="text-3xl font-bold text-gray-900 mt-6">Create account</h1>
+          <p className="text-gray-600 mt-2">Start your journey with us</p>
         </div>
 
-        <Card>
-          <form className="space-y-4" onSubmit={handleSubmit}>
+        <Card gradient hover>
+          <form className="space-y-5" onSubmit={handleSubmit}>
             <div className="grid grid-cols-2 gap-4">
               <Input
                 type="text"
@@ -108,6 +133,7 @@ export default function RegisterPage() {
               required
               minLength={6}
             />
+            
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">I am a</label>
               <div className="flex gap-4">
@@ -133,15 +159,22 @@ export default function RegisterPage() {
                 </label>
               </div>
             </div>
+            
             {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-              {loading ? 'Creating account...' : 'Create Account'}
+            
+            <Button 
+              type="submit" 
+              variant="kenya" 
+              className="w-full"
+              isLoading={isLoading}
+            >
+              Create Account
             </Button>
           </form>
 
           <p className="text-center text-gray-600 mt-6">
             Already have an account?{' '}
-            <Link href="/auth/login" className="text-blue-600 hover:underline">
+            <Link href="/auth/login" className="font-semibold bg-gradient-to-r from-[#006B3F] to-[#00A8E8] bg-clip-text text-transparent hover:opacity-80 transition-opacity">
               Sign in
             </Link>
           </p>
