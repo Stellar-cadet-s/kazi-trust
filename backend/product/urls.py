@@ -1,4 +1,4 @@
-from .email_auth import UserRegistrationView,PasswordResetRequestView,PasswordResetConfirmView,EmailPasswordLoginView
+from .email_auth import UserRegistrationView,EmailPasswordLoginView
 
 from django.urls import path
 

@@ -96,26 +96,3 @@ class UserRegistrationView(APIView):
 
 
 
-
-from .serializers import PasswordResetRequestSerializer, PasswordResetConfirmSerializer
-
-class PasswordResetRequestView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = PasswordResetRequestSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(request)
-            return Response({"message": "Password reset email sent."}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class PasswordResetConfirmView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = PasswordResetConfirmSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"message": "Password has been reset."}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
