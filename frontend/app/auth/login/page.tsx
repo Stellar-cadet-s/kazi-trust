@@ -1,13 +1,39 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { Shield, Sparkles } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Container } from '@/components/layout';
 import { Button, Input, Card } from '@/components/ui';
-import { useState } from 'react';
+import { authService } from '@/services/api';
+import { setAuth } from '@/lib/auth';
 
 export default function LoginPage() {
-  const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+  const [emailOrPhone, setEmailOrPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const res = await authService.login(emailOrPhone.trim(), password);
+      setAuth(res.access, res.user);
+      if (res.user.user_type === 'employer') {
+        router.push('/employer/dashboard');
+      } else {
+        router.push('/worker/dashboard');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center py-12 relative overflow-hidden">
@@ -41,34 +67,36 @@ export default function LoginPage() {
           </div>
           
           <h1 className="text-3xl font-bold text-gray-900 mt-6">Welcome back</h1>
-          <p className="text-gray-600 mt-2">Sign in to your account</p>
+          <p className="text-gray-600 mt-2">Sign in with email or phone number</p>
         </div>
 
         <Card gradient hover>
-          <form className="space-y-6">
+          <form className="space-y-6" onSubmit={handleSubmit}>
             <Input
-              type="email"
-              label="Email"
-              placeholder="you@example.com"
+              type="text"
+              label="Email or phone number"
+              placeholder="you@example.com or 254700000000"
+              value={emailOrPhone}
+              onChange={(e) => setEmailOrPhone(e.target.value)}
               required
             />
             <Input
               type="password"
               label="Password"
               placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
+            
+            {error && <p className="text-sm text-red-600">{error}</p>}
             
             <Button 
               type="submit" 
               variant="stellar" 
               className="w-full"
-              isLoading={isLoading}
-              onClick={(e) => {
-                e.preventDefault();
-                setIsLoading(true);
-                setTimeout(() => setIsLoading(false), 2000);
-              }}
+              isLoading={loading}
+              disabled={loading}
             >
               Sign In
             </Button>
