@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
-import { LayoutDashboard, Briefcase, Users, BookOpen } from 'lucide-react';
+import Link from 'next/link';
+import { LayoutDashboard, Briefcase, Users, BookOpen, LogOut } from 'lucide-react';
 import { Sidebar } from '@/components/layout';
 
 const employerNav = [
@@ -12,7 +13,18 @@ const employerNav = [
 export default function EmployerLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Sidebar items={employerNav} />
+      <div className="w-64 flex flex-col bg-white border-r border-gray-200 min-h-screen">
+        <Sidebar items={employerNav} />
+        <div className="p-4 mt-auto border-t border-gray-200">
+          <Link
+            href="/auth/logout"
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-gray-600 hover:bg-gray-50"
+          >
+            <LogOut size={20} />
+            <span>Log out</span>
+          </Link>
+        </div>
+      </div>
       <main className="flex-1 p-8">{children}</main>
     </div>
   );

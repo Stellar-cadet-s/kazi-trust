@@ -1,51 +1,61 @@
+// Matches Django backend API
+
 export interface User {
-  id: string;
-  email: string;
-  name: string;
-  phone: string;
-  role: 'employer' | 'worker';
-  verified: boolean;
-  createdAt: string;
+  id: number;
+  email: string | null;
+  phone_number: string;
+  first_name: string;
+  last_name: string;
+  user_type: 'employer' | 'employee';
 }
 
 export interface Worker extends User {
-  skills: string[];
-  rating: number;
-  reviewCount: number;
-  location: string;
-  bio: string;
+  user_type: 'employee';
 }
 
-export interface Contract {
-  id: string;
+// Backend: JobListing (we use as Contract in UI)
+export interface JobListing {
+  id: number;
   title: string;
   description: string;
-  amount: number;
-  status: 'pending' | 'active' | 'completed' | 'cancelled';
-  employerId: string;
-  workerId?: string;
-  startDate: string;
-  location: string;
-  createdAt: string;
-  updatedAt: string;
+  budget: string;
+  status: JobStatus;
+  employer: number;
+  employer_name?: string;
+  employee: number | null;
+  created_at: string;
+  updated_at: string;
+  assigned_at: string | null;
+  completed_at: string | null;
+  escrow_contract_id: string | null;
 }
 
+export type JobStatus =
+  | 'open'
+  | 'assigned'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+
+// Legacy alias for UI
+export type Contract = JobListing;
+
 export interface ApiError {
-  error: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
+  error?: string;
+  [key: string]: unknown;
 }
 
 export interface AuthResponse {
   user: User;
-  token: string;
+  access: string;
+  refresh: string;
+  message?: string;
 }
 
 export interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  pageSize: number;
+  data?: T[];
+  results?: T[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
 }

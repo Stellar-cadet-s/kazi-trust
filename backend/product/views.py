@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
 import uuid
 import logging
 
@@ -41,6 +42,8 @@ class UserRegistrationView(APIView):
                     "id": user.id,
                     "phone_number": user.phone_number,
                     "email": user.email,
+                    "first_name": user.first_name or "",
+                    "last_name": user.last_name or "",
                     "user_type": user.user_type
                 },
                 "access": str(refresh.access_token),
@@ -68,6 +71,8 @@ class UserLoginView(APIView):
                     "id": user.id,
                     "phone_number": user.phone_number,
                     "email": user.email,
+                    "first_name": user.first_name or "",
+                    "last_name": user.last_name or "",
                     "user_type": user.user_type
                 }
             })
@@ -144,8 +149,10 @@ class JobListingListCreateView(APIView):
             # Employers see their own listings
             listings = JobListing.objects.filter(employer=request.user)
         elif user_type == 'employee':
-            # Employees see open listings
-            listings = JobListing.objects.filter(status='open')
+            # Employees see open listings + jobs assigned to them
+            listings = JobListing.objects.filter(
+                Q(status='open') | Q(employee=request.user)
+            ).distinct()
         else:
             # Admin sees all
             listings = JobListing.objects.all()
