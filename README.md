@@ -1,448 +1,481 @@
-# Kazi Trust – API Reference
+# TrustWork – Full Stack Overview
 
-Stellar-based job platform with escrow, M-Pesa deposits, and mobile money payouts.
-
-**Base URL:** `http://localhost:8000/api` (or your deployment host)
+> End-to-end guide for running the **smart contract**, **backend**, and **frontend** in this project – plus how the whole trust + payments flow works.
 
 ---
 
-## Table of Contents
+## 1. High-level architecture
 
-1. [Authentication](#authentication)
-2. [USSD](#ussd)
-3. [Job Listings](#job-listings)
-4. [Payment Callbacks](#payment-callbacks)
+This project is a full stack domestic work platform that connects **employers** and **workers** with:
 
----
+- **Smart contract (Stellar Soroban)**: Holds funds in escrow.
+- **Backend (Django REST)**: Business logic, security, and integrations (M‑Pesa, Paystack, Intersend, Soroban client, USSD).
+- **Frontend (Next.js)**: Web app for employers and workers.
 
-## Authentication
+### Roles
 
-### Register (create account)
+- **Employer**
+  - Posts jobs (domestic work, tasks).
+  - Deposits money into escrow via **Paystack** (card, bank, etc.).
+  - Assigns a worker from applicants.
+  - Marks work as complete – escrow releases funds to the worker’s **M‑Pesa**.
 
-**Endpoint:** `POST /api/auth/register/`  
-**Auth:** None
-
-**Request (JSON):**
-
-```json
-{
-    "phone_number": "254700111001",
-    "password": "YourSecurePass123!",
-    "email": "user@example.com",
-    "first_name": "John",
-    "last_name": "Doe",
-    "user_type": "employer"
-}
-```
-
-| Field          | Type   | Required | Description                          |
-|----------------|--------|----------|--------------------------------------|
-| `phone_number` | string | Yes      | Unique; format `254XXXXXXXXX` or `07XXXXXXXX` |
-| `password`     | string | Yes      | Min 6 characters                     |
-| `email`        | string | No       | Unique if provided                    |
-| `first_name`   | string | No       |                                      |
-| `last_name`    | string | No       |                                      |
-| `user_type`    | string | No       | `"employer"` or `"employee"` (default: `"employer"`) |
-
-**Response `201 Created`:**
-
-```json
-{
-    "message": "User registered successfully",
-    "user": {
-        "id": 1,
-        "phone_number": "254700111001",
-        "email": "user@example.com",
-        "user_type": "employer"
-    },
-    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
-}
-```
-
-**Error `400` (e.g. duplicate phone):**
-
-```json
-{
-    "phone_number": ["A user with this phone number already exists."]
-}
-```
+- **Worker**
+  - Creates account (web or USSD).
+  - Browses and applies to jobs.
+  - Builds **verifiable work history** (completed jobs with ratings/summary).
+  - Gets paid to **M‑Pesa** and can optionally **save/invest** some earnings in Stellar USD.
 
 ---
 
-### Login
+## 2. Smart contract layer (Stellar Soroban)
 
-**Endpoint:** `POST /api/auth/login/`  
-**Auth:** None
+### Contract ID
 
-**Request – by phone:**
+**Active escrow contract ID (Stellar Soroban):**
 
-```json
-{
-    "phone_number": "254700111001",
-    "password": "YourSecurePass123!"
-}
+```text
+CAL654B6VGGPX65U7QRFMXNQRK34SYZUSJA6FX3YILKLG7MTPZFBWRA2
 ```
 
-**Request – by email:**
+This contract manages:
 
-```json
-{
-    "email": "user@example.com",
-    "password": "YourSecurePass123!"
-}
+- **create_escrow** – create a new escrow for a job.
+- **fund_escrow** – employer funds escrow (triggered after successful Paystack deposit).
+- **release_escrow** – release funds from employer → worker when job is completed.
+- **balance / state** – view current escrow state and balances.
+
+> The Django backend calls this contract via a **Soroban client** (Python) so that the web app never exposes secret keys.
+
+### Contract code & client
+
+```text
+stellar_escrow/
+├── contract/             # Rust Soroban smart contract (on-chain logic)
+│   ├── Cargo.toml
+│   └── src/lib.rs        # create, fund, release, balance
+└── python_client/
+    ├── escrow_client.py  # Python wrapper: create_escrow, fund_escrow, release_escrow, get_balance
+    └── ...
 ```
 
-**Response `200 OK`:**
+**How it ties into Django:**
 
-```json
-{
-    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-    "user": {
-        "id": 1,
-        "phone_number": "254700111001",
-        "email": "user@example.com",
-        "user_type": "employer"
-    }
-}
-```
+- When an employer posts a job, the backend **creates an escrow** on Stellar (or prepares a record for it).
+- When Paystack deposit succeeds, backend:
+  - Updates the local `EscrowContract` record.
+  - Calls the Soroban contract **fund_escrow**.
+- When employer marks work complete, backend:
+  - Calls **release_escrow**.
+  - Triggers **Intersend** mobile-money payout to worker’s M‑Pesa number.
 
-**Error `400`:**
-
-```json
-{
-    "non_field_errors": ["Invalid credentials."]
-}
-```
+Environment variables control whether the backend uses the Python client, Rust service, or a mock for local dev.
 
 ---
 
-## USSD
+## 3. Backend (Django REST API)
 
-### USSD main handler
+Location:
 
-**Endpoint:** `POST /api/ussd/`  
-**Auth:** None  
-**Content-Type:** `application/json` or `application/x-www-form-urlencoded`
-
-**Request (JSON):**
-
-```json
-{
-    "sessionId": "unique_session_id_123",
-    "phoneNumber": "254712345678",
-    "text": "1*1*John*Doe*john@example.com"
-}
+```text
+backend/
+├── backend/              # Django project (settings, URLs)
+└── product/              # Main Django app
+    ├── models.py
+    ├── views.py
+    ├── serializers.py
+    ├── urls.py
+    ├── ussd.py
+    ├── mobile_money_integration.py
+    └── stellar_integration.py
 ```
 
-| Field         | Type   | Description                    |
-|---------------|--------|--------------------------------|
-| `sessionId`   | string | Unique per USSD session        |
-| `phoneNumber` | string | Caller MSISDN                  |
-| `text`        | string | User input; levels split by `*` |
-
-**Response `200 OK` (plain text, USSD format):**
-
-```
-CON Welcome to Transparency Platform
-1. Register
-2. Login
-3. Client Services
-4. Employee Services
-5. Admin Services
-```
+### Key models (simplified)
 
-Other responses use `CON` (continue) or `END` (end session).
-
----
-
-### USSD registration callback
-
-**Endpoint:** `POST /api/ussd/register-callback/`  
-**Auth:** None  
-
-Used when a user completes registration via USSD.
-
-**Request (JSON):**
-
-```json
-{
-    "phone_number": "254700111003",
-    "user_type": "employee"
-}
-```
-
-| Field          | Type   | Required | Description        |
-|----------------|--------|----------|--------------------|
-| `phone_number` | string | Yes      | User’s phone       |
-| `user_type`    | string | No       | `"employer"` / `"employee"` |
-
-**Response `201 Created` (new user):**
-
-```json
-{
-    "message": "User registered via USSD",
-    "user_id": 3,
-    "phone_number": "254700111003",
-    "ussd_pin": "123456",
-    "user_type": "employee"
-}
-```
-
-**Response `200 OK` (existing user):**
-
-```json
-{
-    "message": "User already exists",
-    "user_id": 3,
-    "phone_number": "254700111003",
-    "ussd_pin": "123456"
-}
-```
-
----
-
-## Job Listings
-
-All job endpoints require:  
-**Header:** `Authorization: Bearer <access_token>`
-
----
-
-### List jobs
-
-**Endpoint:** `GET /api/jobs/`  
-**Auth:** Required  
-
-- **Employer:** own listings only  
-- **Employee:** open listings  
-- **Admin:** all  
-
-**Request:** No body.
-
-**Response `200 OK`:**
-
-```json
-[
-    {
-        "id": 1,
-        "title": "Website Development",
-        "description": "Build a responsive company website (5 pages)",
-        "budget": "25000.00",
-        "status": "open",
-        "employer": 1,
-        "employer_name": "Test Employer",
-        "employee": null,
-        "created_at": "2025-02-11T12:00:00Z",
-        "updated_at": "2025-02-11T12:00:00Z",
-        "assigned_at": null,
-        "completed_at": null,
-        "escrow_contract_id": "ESCROW_ABC123XYZ"
-    }
-]
-```
+- `CustomUser`
+  - `phone_number`, `email`
+  - `user_type` – `employer` / `employee` / `admin`
+  - `ussd_pin` – PIN for USSD login
 
----
+- `JobListing`
+  - `employer`, `title`, `description`, `budget`
+  - `status` – `open`, `assigned`, `in_progress`, `completed`, `cancelled`
+  - `employee` – worker assigned
+  - `assigned_at`, `completed_at`
+  - `work_summary` – text summary of tasks done (for verifiable work history)
+  - `escrow_contract_id` – link to on-chain contract
 
-### Create job listing
+- `JobApplication`
+  - `job_listing`, `employee`, `status` (`pending`, `accepted`, `rejected`)
 
-**Endpoint:** `POST /api/jobs/`  
-**Auth:** Required (employer only)
+- `EscrowContract`
+  - `job_listing`, `contract_id`, `amount`, `status`, timestamps.
 
-**Request (JSON):**
+- `MpesaDeposit`, `PaystackDeposit`
+  - Track deposits via M‑Pesa and Paystack.
 
-```json
-{
-    "title": "Website Development",
-    "description": "Build a responsive company website (5 pages)",
-    "budget": "25000.00"
-}
-```
+- `MobileMoneyPayout`
+  - Payout to worker: `employee`, `phone_number`, `amount`, `status`.
 
-| Field         | Type   | Required | Description   |
-|---------------|--------|----------|---------------|
-| `title`       | string | Yes      | Job title     |
-| `description` | string | Yes      | Job details   |
-| `budget`      | string | Yes      | Decimal, e.g. `"25000.00"` |
+- `JobMessage`
+  - For chat: `job_listing`, `sender`, `text`, `created_at`.
 
-**Response `201 Created`:**
+### Key API endpoints
 
-```json
-{
-    "id": 1,
-    "title": "Website Development",
-    "description": "Build a responsive company website (5 pages)",
-    "budget": "25000.00",
-    "status": "open",
-    "employer": 1,
-    "employer_name": "Test Employer",
-    "employee": null,
-    "created_at": "2025-02-11T12:00:00Z",
-    "updated_at": "2025-02-11T12:00:00Z",
-    "assigned_at": null,
-    "completed_at": null,
-    "escrow_contract_id": "ESCROW_ABC123XYZ"
-}
-```
+Authentication:
 
-**Error `403` (non-employer):**
+- `POST /api/auth/register/` – register with phone + password + type (employer/employee).
+- `POST /api/auth/login/` – login with email or phone + password.
 
-```json
-{
-    "error": "Only employers can create job listings"
-}
-```
+Jobs (employer & worker):
 
----
+- `GET /api/jobs/` – list jobs.
+  - Employer: sees own jobs.
+  - Employee: sees open jobs + jobs assigned to them.
+- `POST /api/jobs/` – employer creates a job.
+- `GET /api/jobs/{id}/` – job detail.
+- `PATCH /api/jobs/{id}/` – employer updates job:
+  - `applicant_id` – assign a worker from applicants.
+  - (Legacy) `employee_id` – assign by user.
+- `POST /api/jobs/{id}/apply/` – worker applies to a job (`JobApplication`).
+- `POST /api/jobs/{id}/withdraw-application/` – worker withdraws pending application.
+- `GET /api/jobs/{id}/applicants/` – employer sees applicants for a job (with worker phone + verified work history).
 
-### Get job by ID
-
-**Endpoint:** `GET /api/jobs/{id}/`  
-**Auth:** Required  
+Escrow & payments:
 
-**Request:** No body.
+- `POST /api/jobs/{id}/initiate-paystack/` – backend returns Paystack reference + amount (kobo).
+- `POST /api/callbacks/paystack/deposit/` – Paystack webhook; marks deposit completed + funds escrow.
+- `POST /api/callbacks/mpesa/deposit/` – M‑Pesa deposit callback (if used).
+- `GET /api/jobs/{id}/escrow/` – escrow status for a job.
+- `POST /api/jobs/{id}/complete/`
+  - Employer marks work complete.
+  - Body can include `{ "work_summary": "Tasks done..." }`.
+  - Calls Soroban contract to release funds.
+  - Triggers mobile-money payout to worker.
 
-**Response `200 OK`:** Same object shape as in list/create (single job).
+Transactions:
 
-**Error `403`:** Not allowed to view this listing.  
-**Error `404`:** Job not found.
-
----
-
-### Update job (assign employee / status)
-
-**Endpoint:** `PATCH /api/jobs/{id}/`  
-**Auth:** Required (employer for own listing)
-
-**Assign employee (job must be `open`):**
+- `GET /api/transactions/`
+  - Employer: deposit history.
+  - Employee: payout history.
 
-```json
-{
-    "employee_id": 2
-}
-```
+USSD:
 
-**Update status only:**
+- `POST /api/ussd/`
+  - Handles USSD sessions; supports JSON or form data:
+    - `sessionId`, `phoneNumber`, `text`.
+- `POST /api/ussd/register-callback/`
+  - Registration callback from USSD flow.
 
-```json
-{
-    "status": "in_progress"
-}
-```
+Employer workers overview:
 
-Allowed statuses: `open`, `assigned`, `in_progress`, `completed`, `cancelled`.
+- `GET /api/employer/workers-overview/`
+  - Returns:
+    - `hired_workers` (jobs with assigned workers, duration, M‑Pesa number).
+    - `open_jobs_with_applicants` (open jobs + applicants + their verified work history).
 
-**Response `200 OK`:** Updated job object (same shape as get job).
+Employee work history:
 
-**Error `403`:** Not your listing.  
-**Error `404`:** Job or employee not found.
+- `GET /api/employee/my-applications/` – jobs the worker has applied for.
+- `GET /api/employee/work-history/` – **verifiable work history** (completed jobs, summary, duration).
 
----
+Job chat:
 
-### Complete work (release escrow & payout)
+- `GET /api/chats/` – list jobs (with assigned worker) where the current user can chat.
+- `GET /api/jobs/{id}/messages/` – list chat messages for that job.
+- `POST /api/jobs/{id}/messages/` – send a message.
 
-**Endpoint:** `POST /api/jobs/{job_id}/complete/`  
-**Auth:** Required (employer only)
-
-**Request:** No body.
-
-**Response `200 OK`:**
-
-```json
-{
-    "message": "Work completed and funds released",
-    "job_id": 1,
-    "escrow_status": "released",
-    "payout_status": "completed",
-    "amount": "25000.00"
-}
-```
-
-**Error `400`:** Job not in `in_progress` or escrow not funded.  
-**Error `403`:** Not the employer.  
-**Error `404`:** Job or escrow not found.
-
----
-
-## Payment Callbacks
-
-### M-Pesa deposit callback
-
-**Endpoint:** `POST /api/callbacks/mpesa/deposit/`  
-**Auth:** None (called by M-Pesa)
-
-**Request (JSON) – typical M-Pesa payload:**
-```json
-{
-    "TransactionType": "Pay Bill",
-    "TransID": "RKTQDM7W6S",
-    "TransTime": "20191122063845",
-    "TransAmount": "25000.00",
-    "BusinessShortCode": "174379",
-    "BillRefNumber": "ESCROW_ABC123XYZ",
-    "InvoiceNumber": "",
-    "OrgAccountBalance": "19.00",
-    "ThirdPartyTransID": "",
-    "MSISDN": "254708374149",
-    "FirstName": "John",
-    "MiddleName": "Doe",
-    "LastName": "Smith"
-}
-```
-
-Important fields:
-
-| Field           | Description                          |
-|-----------------|--------------------------------------|
-| `TransID`       | M-Pesa transaction ID               |
-| `TransAmount`   | Amount paid                          |
-| `MSISDN`        | Payer phone (e.g. 254XXXXXXXXX)      |
-| `BillRefNumber` | Must be job’s `escrow_contract_id`   |
-
-**Response `200 OK`:**
-
-```json
-{
-    "message": "Deposit processed successfully",
-    "contract_id": "ESCROW_ABC123XYZ",
-    "amount": 25000.0,
-    "status": "funded"
-}
-```
-
-**Error `400`:** Invalid bill reference.  
-**Error `404`:** Escrow contract not found.
-
----
-
-## Running the test script
-
-From project root:
+### Backend – running locally
 
 ```bash
 cd backend
-chmod +x test.sh
-./test.sh http://localhost:8000
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+python3 manage.py migrate
+python3 manage.py runserver 0.0.0.0:8000
 ```
 
-If omitted, base URL defaults to `http://localhost:8000/api` (script appends `/api` when you pass root URL). To test another host:
+Environment variables (examples):
+
+- `STELLAR_USE_PYTHON_CLIENT=true` – use the Python Soroban client.
+- `STELLAR_NETWORK` – network (testnet/mainnet).
+- `PAYSTACK_PUBLIC_KEY`, `PAYSTACK_SECRET_KEY`
+- `INTERSEND_API_KEY`, `INTERSEND_API_URL`
+
+---
+
+## 4. Frontend (Next.js)
+
+Location:
+
+```text
+frontend/
+├── app/
+│   ├── page.tsx                    # Landing page (trust + Stellar savings)
+│   ├── auth/                       # Login / Register / Logout
+│   ├── employer/                   # Employer dashboard, jobs, workers, transactions, rights
+│   └── worker/                     # Worker dashboard, browse, work history, financial literacy, transactions, rights
+├── components/
+│   ├── ui/                         # Buttons, cards, inputs, badges, etc.
+│   ├── layout/                     # Navbar, Sidebar, PageHeader
+│   └── ChatWidget.tsx              # Floating chat widget (employer↔worker per job)
+├── services/api.ts                 # Typed API client (auth, jobs, escrow, chat, etc.)
+├── types/                          # Shared TypeScript types
+└── ...
+```
+
+### Key screens
+
+Public:
+
+- `/` – Landing page
+  - Explains what the platform does.
+  - Shows the **trust mechanism** between employer and worker.
+  - Shows **Stellar savings / APY** explanation (how workers can earn interest on savings).
+
+Auth:
+
+- `/auth/login` – login with email or phone.
+- `/auth/register` – register as employer or worker.
+
+Employer:
+
+- `/employer/dashboard`
+  - Stats: total jobs, workers hired, active, completed.
+  - Recent jobs with actions:
+    - Fund escrow via Paystack.
+    - Mark work as done → releases escrow → pays worker.
+  - “Employees Hired & Duration” widget (hired workers, job durations, M‑Pesa numbers).
+- `/employer/contracts/new` – post a new job.
+- `/employer/workers`
+  - **Find workers**:
+    - Shows open jobs with applicants.
+    - For each applicant: name, M‑Pesa number, **verified work history** cards (previous completed jobs, duration, tasks).
+    - Employer can **assign** directly from this page.
+- `/employer/transactions` – deposit / payout history (from employer’s perspective).
+- `/employer/rights` – rights & information.
+
+Worker:
+
+- `/worker/dashboard`
+  - **Total earnings** (sum of completed payouts).
+  - **M‑Pesa number** used for payouts.
+  - Active / open jobs counts.
+  - **Escrow card**: per job – KES held in escrow + when it will be released.
+  - **“Save & earn (Stellar USD)”** section:
+    - Shows invested amount (placeholder) and estimated return (e.g. ~5% APY).
+    - Explains that the worker can choose how much to keep in M‑Pesa vs invest in Stellar USD to earn interest.
+- `/worker/browse`
+  - List of open jobs.
+  - Worker can **apply** (uses the `/apply/` endpoint).
+  - Shows “Applied” / “Withdraw” buttons when appropriate.
+- `/worker/work-history`
+  - Worker-facing **verifiable work history**:
+    - Completed jobs with verified badge, employer name, duration, KES amount, and work summary.
+- `/worker/financial-literacy`
+  - **Chatbot-style** financial literacy guide.
+  - Languages: **English** and **Kiswahili**.
+  - Topics: saving, budgeting, using M‑Pesa, interest, avoiding bad debt, goal setting.
+  - Beautiful, minimal chat UI with topic chips and quick replies.
+- `/worker/transactions`
+  - Worker’s payouts and amounts.
+- `/worker/rights`
+  - Rights & legal information.
+
+### Chat widget (UI)
+
+Component: `components/ChatWidget.tsx`
+
+- **Floating blue button** in bottom-right (on both worker and employer layouts).
+- Opens a **minimal chat panel**:
+  - Left view: list of active chats (jobs).
+  - Right view: messages for selected job.
+  - Messages:
+    - Your messages: blue bubbles on the right.
+    - Other side: gray/white bubbles on the left with sender name.
+  - Input: single-line field + send button, with placeholder like “Message (e.g. job address)...”.
+
+Uses:
+
+- `GET /api/chats/` to list available conversations.
+- `GET /api/jobs/{id}/messages/` to load messages.
+- `POST /api/jobs/{id}/messages/` to send.
+
+### Frontend – running locally
 
 ```bash
-./test.sh https://your-domain.com
+cd frontend
+npm install
+
+cp .env.example .env.local
+# Edit .env.local:
+# NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+
+npm run dev
 ```
 
-Script will:
+Open:
 
-1. Register employer and employee  
-2. Login and capture tokens  
-3. Create a job listing  
-4. List jobs, get job by ID  
-5. Assign employee and update status  
-6. Simulate M-Pesa deposit callback  
-7. Call complete-work endpoint  
-8. Hit USSD handler and register-callback  
+```text
+http://localhost:3000
+```
 
-Ensure the Django server is running (`python manage.py runserver`) before executing `test.sh`.
+---
 
-**Re-running tests:** The script uses fixed phone numbers (`254700111001`, `254700111002`). If you run it again on the same database, registration may return 400 (duplicate phone). Use a fresh DB or change the phone numbers in `test.sh` for repeated runs.
+## 5. End-to-end flow (how everything works)
+
+### 5.1 Employer posts a job
+
+1. Employer logs in → `/employer/dashboard`.
+2. Clicks **“Post a Job”** → fills in title, description, budget.
+3. Backend creates:
+   - `JobListing`.
+   - An associated `EscrowContract` record.
+   - Optionally calls Soroban contract **create_escrow** using the contract ID:
+
+```text
+CAL654B6VGGPX65U7QRFMXNQRK34SYZUSJA6FX3YILKLG7MTPZFBWRA2
+```
+
+### 5.2 Worker applies and is assigned
+
+1. Worker goes to `/worker/browse` and sees all open jobs.
+2. Clicks **Apply** on a job → backend creates `JobApplication`.
+3. Employer sees applicants:
+   - On `/employer/workers` and job detail page.
+   - For each applicant:
+     - Name, phone (M‑Pesa number).
+     - **Verified work history** (past completed jobs).
+4. Employer selects an applicant and clicks **Assign**.
+   - Backend:
+     - Ensures applicant belongs to that job.
+     - Sets `job_listing.employee`.
+     - Sets status to `assigned`, `assigned_at` timestamp.
+     - Links escrow to worker.
+
+### 5.3 Employer funds escrow (Paystack) and trust
+
+1. On `/employer/dashboard` or job detail page:
+   - Employer clicks **Deposit with Paystack**.
+2. Frontend:
+   - Calls `POST /api/jobs/{id}/initiate-paystack/`.
+   - Receives `reference`, `amount_kobo`, `email`, etc.
+   - Opens Paystack widget with that reference.
+3. Paystack:
+   - On success, calls the backend webhook `/api/callbacks/paystack/deposit/`.
+4. Backend:
+   - Verifies signature.
+   - Marks `PaystackDeposit` as `completed`.
+   - Updates `EscrowContract` to `funded`.
+   - Optionally calls Soroban **fund_escrow** on the contract ID above.
+5. Worker dashboard:
+   - Shows **Amount held in escrow** for assigned jobs, in KES.
+
+At this point:
+
+- Employer knows money is in escrow and safe.
+- Worker knows payment is locked and will be released when work is complete.
+
+### 5.4 Work complete → escrow release → payout
+
+1. Employer marks a job as complete:
+   - On dashboard or job page, clicks **“Mark complete & release payment”**.
+   - Optionally fills **“Tasks completed”** (work_summary) for verified work.
+2. Backend:
+   - Validates employer is owner of the job.
+   - Ensures job status is `assigned` or `in_progress`.
+   - Sets job to `completed`, saves `work_summary`.
+   - Checks `EscrowContract` is `funded`.
+   - Calls **release_escrow** on Soroban contract:
+     - `contract_id = CAL654B6VGGPX65U7QRFMXNQRK34SYZUSJA6FX3YILKLG7MTPZFBWRA2`.
+   - Updates escrow status to `released`.
+   - Creates `MobileMoneyPayout` with:
+     - Worker’s `phone_number` (normalized to 254… format).
+     - Amount.
+   - Calls Intersend API to send mobile money to worker.
+3. Worker:
+   - Sees payout in `/worker/transactions` and **Total earnings** on dashboard.
+
+### 5.5 Chat for location & coordination
+
+At any time after a worker is assigned:
+
+- Employer and worker can use the **floating chat widget**:
+  - Share job location, directions, time, and clarifications.
+  - Messages are stored per job in `JobMessage`.
+
+---
+
+## 6. USSD testing with curl (optional)
+
+USSD endpoint:
+
+```text
+POST /api/ussd/
+```
+
+JSON example:
+
+```bash
+curl -X POST http://localhost:8000/api/ussd/ \
+  -H \"Content-Type: application/json\" \
+  -d '{
+    \"sessionId\": \"session-123\",
+    \"phoneNumber\": \"254700000000\",
+    \"text\": \"\"
+  }'
+```
+
+Form example:
+
+```bash
+curl -X POST http://localhost:8000/api/ussd/ \
+  -d \"sessionId=session-123\" \
+  -d \"phoneNumber=254700000000\" \
+  -d \"text=1\"
+```
+
+---
+
+## 7. Running everything together
+
+1. **Start backend (Django + API)**
+   ```bash
+   cd backend
+   source venv/bin/activate   # if created
+   python3 manage.py migrate
+   python3 manage.py runserver 0.0.0.0:8000
+   ```
+
+2. **Start frontend (Next.js)**
+   ```bash
+   cd frontend
+   npm install
+   cp .env.example .env.local
+   # ensure NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+   npm run dev
+   ```
+
+3. **Confirm contract integration** (optional for dev)
+   - Set STELLAR environment variables so `stellar_integration.py` can call Soroban.
+   - Make sure the contract ID is set or used in your settings:
+     - `CAL654B6VGGPX65U7QRFMXNQRK34SYZUSJA6FX3YILKLG7MTPZFBWRA2`
+
+4. **Open the app**
+   - Web: `http://localhost:3000`
+   - Backend API: `http://localhost:8000/api/`
+
+You now have:
+
+- Soroban **smart contract escrow** on Stellar.
+- Django **backend** handling business logic, mobile money, and contract calls.
+- Next.js **frontend** for employers and workers, including:
+  - Verified work history.
+  - Escrow-based trust.
+  - Paystack deposits.
+  - M‑Pesa payouts.
+  - Job chat.
+  - Financial literacy in local language.
