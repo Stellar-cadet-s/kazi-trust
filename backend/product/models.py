@@ -123,12 +123,37 @@ class JobListing(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     assigned_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # Verified work record: tasks/summary filled by employer when marking complete (for trust)
+    work_summary = models.TextField(blank=True, null=True, help_text="Tasks performed / work done (visible to other employers)")
     
     # Escrow contract reference
     escrow_contract_id = models.CharField(max_length=100, blank=True, null=True)
     
     def __str__(self):
         return f"{self.title} - {self.status}"
+
+
+class JobApplication(models.Model):
+    """Worker application to a job - employer picks one to assign"""
+    job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE, related_name='applications')
+    employee = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='job_applications')
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('accepted', 'Accepted'),
+            ('rejected', 'Rejected'),
+        ],
+        default='pending'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = [['job_listing', 'employee']]
+    
+    def __str__(self):
+        return f"{self.job_listing.title} - {self.employee.get_full_name()}"
+
 
 class EscrowContract(models.Model):
     """Stellar escrow contract for holding funds"""
@@ -177,6 +202,28 @@ class MpesaDeposit(models.Model):
     
     def __str__(self):
         return f"M-Pesa {self.transaction_reference} - {self.amount}"
+
+
+class PaystackDeposit(models.Model):
+    """Paystack deposit - employer funds escrow via Paystack"""
+    escrow_contract = models.ForeignKey(EscrowContract, on_delete=models.CASCADE, related_name='paystack_deposits')
+    transaction_reference = models.CharField(max_length=100, unique=True)
+    paystack_event_id = models.CharField(max_length=100, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount_in_kobo = models.BigIntegerField(default=0)
+    currency = models.CharField(max_length=3, default='NGN')
+    status = models.CharField(
+        max_length=20,
+        choices=[('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed')],
+        default='pending',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Paystack {self.transaction_reference} - {self.amount}"
+
 
 class Task(models.Model):
     """Legacy Task model - keeping for backward compatibility"""
@@ -248,3 +295,17 @@ class MobileMoneyPayout(models.Model):
     
     def __str__(self):
         return f"Payout {self.transaction_reference} - {self.amount}"
+
+
+class JobMessage(models.Model):
+    """Chat message between employer and employee for a job (e.g. location, coordination)."""
+    job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='sent_job_messages')
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.job_listing_id} from {self.sender_id}: {self.text[:30]}"

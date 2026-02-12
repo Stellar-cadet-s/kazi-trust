@@ -1,12 +1,14 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Briefcase, Users, BookOpen, LogOut } from 'lucide-react';
+import { LayoutDashboard, Briefcase, Users, BookOpen, LogOut, History } from 'lucide-react';
 import { Sidebar } from '@/components/layout';
+import { ChatWidget } from '@/components/ChatWidget';
 
 const employerNav = [
   { href: '/employer/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
   { href: '/employer/contracts/new', label: 'Post a Job', icon: <Briefcase size={20} /> },
   { href: '/employer/workers', label: 'Find Workers', icon: <Users size={20} /> },
+  { href: '/employer/transactions', label: 'Transactions', icon: <History size={20} /> },
   { href: '/employer/rights', label: 'Know Your Rights', icon: <BookOpen size={20} /> },
 ];
 
@@ -26,6 +28,7 @@ export default function EmployerLayout({ children }: { children: ReactNode }) {
         </div>
       </div>
       <main className="flex-1 p-8">{children}</main>
+      <ChatWidget />
     </div>
   );
 }

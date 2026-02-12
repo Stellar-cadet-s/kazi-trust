@@ -6,19 +6,48 @@ from rest_framework.decorators import api_view, permission_classes
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from django.conf import settings
+from django.http import HttpResponse, HttpResponseBadRequest
+import hmac
+import hashlib
+import json
 import uuid
 import logging
 
-from .models import CustomUser, JobListing, EscrowContract, MpesaDeposit, MobileMoneyPayout
+from .models import CustomUser, JobListing, EscrowContract, MpesaDeposit, MobileMoneyPayout, JobApplication, PaystackDeposit, JobMessage
 from .serializers import (
     UserRegistrationSerializer, EmailPasswordLoginSerializer,
-    JobListingSerializer, JobListingCreateSerializer, EscrowContractSerializer
+    JobListingSerializer, JobListingCreateSerializer, EscrowContractSerializer,
+    JobApplicationSerializer,
 )
 from .stellar_integration import get_stellar_client
 from .mobile_money_integration import get_intersend_client
 from rest_framework_simplejwt.tokens import RefreshToken
 
 logger = logging.getLogger(__name__)
+
+
+def get_employee_work_history(employee):
+    """Return verified work history for an employee (completed jobs) for employer trust."""
+    completed = JobListing.objects.filter(
+        employee=employee, status='completed'
+    ).select_related('employer').order_by('-completed_at')
+    out = []
+    for j in completed:
+        start = j.assigned_at or j.created_at
+        end = j.completed_at
+        duration_days = 0
+        if start and end:
+            delta = end - start
+            duration_days = getattr(delta, 'days', 0) if hasattr(delta, 'days') else 0
+        out.append({
+            "job_title": j.title,
+            "employer_name": j.employer.get_full_name() if j.employer else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            "duration_days": duration_days,
+            "work_summary": j.work_summary or None,
+        })
+    return out
 
 
 # ==================== USER REGISTRATION & AUTHENTICATION ====================
@@ -240,25 +269,59 @@ class JobListingDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        applicant_id = request.data.get('applicant_id')
         employee_id = request.data.get('employee_id')
         new_status = request.data.get('status')
         
-        # Assign employee
-        if employee_id and job_listing.status == 'open':
+        # Assign from applicant (preferred)
+        if applicant_id and job_listing.status == 'open':
             try:
-                employee = CustomUser.objects.get(id=employee_id, user_type='employee')
+                application = JobApplication.objects.get(
+                    id=applicant_id,
+                    job_listing=job_listing,
+                    status='pending'
+                )
+                employee = application.employee
+                application.status = 'accepted'
+                application.save()
                 job_listing.employee = employee
                 job_listing.status = 'assigned'
                 job_listing.assigned_at = timezone.now()
                 job_listing.save()
-                
-                # Update escrow contract
                 if job_listing.escrow_contract:
-                    escrow_contract = job_listing.escrow_contract
-                    escrow_contract.employee = employee
-                    escrow_contract.status = 'in_progress'
-                    escrow_contract.save()
-                
+                    ec = job_listing.escrow_contract
+                    ec.employee = employee
+                    ec.status = 'in_progress'
+                    ec.save()
+                serializer = JobListingSerializer(job_listing)
+                return Response(serializer.data)
+            except JobApplication.DoesNotExist:
+                return Response(
+                    {"error": "Applicant not found or already assigned"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        # Fallback: assign by employee_id (e.g. from dropdown of applicants)
+        if employee_id and job_listing.status == 'open':
+            try:
+                application = JobApplication.objects.filter(
+                    job_listing=job_listing,
+                    employee_id=employee_id,
+                    status='pending'
+                ).first()
+                employee = CustomUser.objects.get(id=employee_id, user_type='employee')
+                if application:
+                    application.status = 'accepted'
+                    application.save()
+                job_listing.employee = employee
+                job_listing.status = 'assigned'
+                job_listing.assigned_at = timezone.now()
+                job_listing.save()
+                if job_listing.escrow_contract:
+                    ec = job_listing.escrow_contract
+                    ec.employee = employee
+                    ec.status = 'in_progress'
+                    ec.save()
                 serializer = JobListingSerializer(job_listing)
                 return Response(serializer.data)
             except CustomUser.DoesNotExist:
@@ -401,6 +464,72 @@ def mpesa_deposit_callback(request):
         )
 
 
+# ==================== PAYSTACK DEPOSIT CALLBACK ====================
+
+def _paystack_verify(raw_body, signature):
+    secret = getattr(settings, 'PAYSTACK_SECRET_KEY', '') or getattr(settings, 'PAYSTACK_SECRET', '')
+    if not secret:
+        return True
+    expected = hmac.new(secret.encode('utf-8'), raw_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def paystack_deposit_callback(request):
+    """Paystack webhook: on charge.success credit escrow. Frontend uses ref=escrow_contract_id."""
+    raw_body = request.body
+    sig = request.headers.get('x-paystack-signature', '')
+    if not _paystack_verify(raw_body, sig):
+        return HttpResponseBadRequest(b"Invalid signature")
+    try:
+        payload = json.loads(raw_body.decode('utf-8'))
+    except Exception:
+        return HttpResponseBadRequest(b"Invalid JSON")
+    if payload.get('event') != 'charge.success':
+        return HttpResponse(status=200)
+    data = payload.get('data') or {}
+    reference = data.get('reference') or data.get('id')
+    if not reference:
+        return HttpResponse(status=200)
+    amount_kobo = int(data.get('amount', 0))
+    amount_main = amount_kobo / 100.0
+    currency = (data.get('currency') or 'NGN').upper()
+    customer_email = (data.get('customer') or {}).get('email') or data.get('customer_email')
+    contract_id = reference if str(reference).startswith('ESCROW_') else None
+    if not contract_id:
+        try:
+            job = JobListing.objects.get(id=int(reference))
+            contract_id = job.escrow_contract_id
+        except (JobListing.DoesNotExist, ValueError):
+            return HttpResponse(status=200)
+    try:
+        escrow_contract = EscrowContract.objects.get(contract_id=contract_id)
+    except EscrowContract.DoesNotExist:
+        return HttpResponse(status=200)
+    PaystackDeposit.objects.get_or_create(
+        transaction_reference=str(reference),
+        defaults={
+            'escrow_contract': escrow_contract,
+            'paystack_event_id': payload.get('id'),
+            'email': customer_email,
+            'amount': amount_main,
+            'amount_in_kobo': amount_kobo,
+            'currency': currency,
+            'status': 'completed',
+            'completed_at': timezone.now(),
+        },
+    )
+    get_stellar_client().fund_escrow_contract(contract_id=contract_id, amount=amount_main, transaction_hash=str(reference))
+    escrow_contract.status = 'funded'
+    escrow_contract.funded_at = timezone.now()
+    escrow_contract.save()
+    if escrow_contract.job_listing_id:
+        escrow_contract.job_listing.escrow_contract_id = contract_id
+        escrow_contract.job_listing.save(update_fields=['escrow_contract_id'])
+    return HttpResponse(status=200)
+
+
 # ==================== WORK COMPLETION & ESCROW RELEASE ====================
 
 @api_view(['POST'])
@@ -424,11 +553,16 @@ def complete_work(request, job_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        if job_listing.status != 'in_progress':
+        if job_listing.status not in ('in_progress', 'assigned'):
             return Response(
-                {"error": f"Job must be in progress. Current status: {job_listing.status}"},
+                {"error": f"Job must be in progress or assigned. Current status: {job_listing.status}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # Optional: tasks/work summary for verified work history (visible to other employers)
+        work_summary = (request.data.get('work_summary') or '').strip() or None
+        if work_summary:
+            job_listing.work_summary = work_summary
         
         # Update job listing status
         job_listing.status = 'completed'
@@ -465,16 +599,29 @@ def complete_work(request, job_id):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
+        # Employee must have M-Pesa (phone) number for payout
+        payout_phone = (job_listing.employee.phone_number or "").strip()
+        if not payout_phone:
+            return Response(
+                {"error": "Worker has no M-Pesa number. They must set a phone number for payment."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # Normalize for payout (254...)
+        if payout_phone.startswith('0'):
+            payout_phone = '254' + payout_phone[1:]
+        elif not payout_phone.startswith('254'):
+            payout_phone = '254' + payout_phone
+
         # Update escrow to released
         escrow_contract.status = 'released'
         escrow_contract.released_at = timezone.now()
         escrow_contract.save()
         
-        # Create mobile money payout record
+        # Create mobile money payout record (use normalized payout_phone)
         payout = MobileMoneyPayout.objects.create(
             escrow_contract=escrow_contract,
             employee=job_listing.employee,
-            phone_number=job_listing.employee.phone_number,
+            phone_number=payout_phone,
             amount=escrow_contract.amount,
             status='pending'
         )
@@ -507,6 +654,351 @@ def complete_work(request, job_id):
         )
 
 
+# ==================== APPLY TO JOB ====================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def apply_to_job(request, job_id):
+    """Worker applies to a job - creates application; employer later assigns from applicants."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if request.user.user_type != 'employee':
+        return Response({"error": "Only workers can apply"}, status=status.HTTP_403_FORBIDDEN)
+    if job_listing.status != 'open':
+        return Response({"error": "Job is not open for applications"}, status=status.HTTP_400_BAD_REQUEST)
+    app, created = JobApplication.objects.get_or_create(
+        job_listing=job_listing,
+        employee=request.user,
+        defaults={'status': 'pending'}
+    )
+    if not created:
+        return Response({"message": "Already applied", "application_id": app.id}, status=status.HTTP_200_OK)
+    return Response(
+        {"message": "Application submitted", "application_id": app.id},
+        status=status.HTTP_201_CREATED
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def withdraw_application(request, job_id):
+    """Worker withdraws their pending application for a job."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if request.user.user_type != 'employee':
+        return Response({"error": "Only workers can withdraw applications"}, status=status.HTTP_403_FORBIDDEN)
+    app = JobApplication.objects.filter(
+        job_listing=job_listing,
+        employee=request.user,
+        status='pending'
+    ).first()
+    if not app:
+        return Response(
+            {"error": "No pending application to withdraw"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    app.delete()
+    return Response({"message": "Application withdrawn"}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_applications(request):
+    """List current user's job applications (for workers to see applied jobs and withdraw)."""
+    if request.user.user_type != 'employee':
+        return Response({"error": "Workers only"}, status=status.HTTP_403_FORBIDDEN)
+    apps = JobApplication.objects.filter(employee=request.user).select_related('job_listing')
+    data = [{"job_id": a.job_listing_id, "application_id": a.id, "status": a.status} for a in apps]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def employee_work_history(request):
+    """Verifiable work history for current employee (completed jobs)."""
+    if request.user.user_type != 'employee':
+        return Response({"error": "Workers only"}, status=status.HTTP_403_FORBIDDEN)
+    jobs = JobListing.objects.filter(employee=request.user, status='completed').select_related('employer').order_by('-completed_at')
+    out = []
+    for j in jobs:
+        start = j.assigned_at or j.created_at
+        end = j.completed_at
+        duration_days = 0
+        if start and end:
+            delta = end - start
+            duration_days = getattr(delta, 'days', 0)
+        out.append({
+            "job_id": j.id,
+            "job_title": j.title,
+            "employer_name": j.employer.get_full_name() if j.employer else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            "duration_days": duration_days,
+            "work_summary": j.work_summary,
+            "budget": str(j.budget),
+        })
+    return Response(out)
+
+
+# ==================== JOB CHAT (MESSAGES) ====================
+
+def _can_access_job_chat(user, job_listing):
+    """Only employer or assigned employee can chat for this job."""
+    if job_listing.employer_id == user.id:
+        return True
+    if job_listing.employee_id == user.id:
+        return True
+    return False
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def job_messages(request, job_id):
+    """List or send messages for a job (employer and assigned employee only)."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if not _can_access_job_chat(request.user, job_listing):
+        return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
+    if request.method == 'GET':
+        messages = JobMessage.objects.filter(job_listing=job_listing).select_related('sender').order_by('created_at')
+        data = [
+            {
+                "id": m.id,
+                "sender_id": m.sender_id,
+                "sender_name": m.sender.get_full_name() or str(m.sender),
+                "is_mine": m.sender_id == request.user.id,
+                "text": m.text,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in messages
+        ]
+        return Response(data)
+    text = (request.data.get('text') or '').strip()
+    if not text:
+        return Response({"error": "Message text required"}, status=status.HTTP_400_BAD_REQUEST)
+    msg = JobMessage.objects.create(job_listing=job_listing, sender=request.user, text=text)
+    return Response({
+        "id": msg.id,
+        "sender_id": msg.sender_id,
+        "sender_name": msg.sender.get_full_name() or str(msg.sender),
+        "is_mine": True,
+        "text": msg.text,
+        "created_at": msg.created_at.isoformat(),
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_chats(request):
+    """List jobs where current user can chat (employer or assigned employee; only jobs with assigned worker)."""
+    from django.db.models import Q
+    jobs = JobListing.objects.filter(
+        Q(employer=request.user) | Q(employee=request.user)
+    ).exclude(employee=None).exclude(status='cancelled').select_related('employer', 'employee').order_by('-updated_at')
+    out = []
+    for j in jobs:
+        other = j.employee if j.employer_id == request.user.id else j.employer
+        out.append({
+            "job_id": j.id,
+            "job_title": j.title,
+            "other_name": other.get_full_name() if other else "—",
+            "status": j.status,
+        })
+    return Response(out)
+
+
+# ==================== EMPLOYER WORKERS OVERVIEW ====================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def employer_workers_overview(request):
+    """List hired workers (with duration) and open jobs with applicant counts for Find Workers page."""
+    if request.user.user_type != 'employer':
+        return Response({"error": "Employer only"}, status=status.HTTP_403_FORBIDDEN)
+    from django.utils import timezone as tz
+    now = tz.now()
+    hired = []
+    for job in JobListing.objects.filter(employer=request.user).exclude(employee=None).select_related('employee'):
+        start = job.assigned_at or job.created_at
+        end = job.completed_at or now
+        if start:
+            delta = (end - start).days if hasattr(end - start, 'days') else 0
+            hired.append({
+                "job_id": job.id,
+                "job_title": job.title,
+                "employee_id": job.employee.id,
+                "employee_name": job.employee.get_full_name(),
+                "employee_phone": job.employee.phone_number,
+                "assigned_at": job.assigned_at.isoformat() if job.assigned_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                "status": job.status,
+                "duration_days": delta,
+            })
+    open_jobs = []
+    for job in JobListing.objects.filter(employer=request.user, status='open'):
+        try:
+            applications = JobApplication.objects.filter(
+                job_listing=job, status='pending'
+            ).select_related('employee')
+            count = applications.count()
+            applicants = [
+                {
+                    "id": a.id,
+                    "employee_id": a.employee_id,
+                    "employee_name": a.employee.get_full_name() or "Worker",
+                    "employee_phone": a.employee.phone_number or "",
+                    "work_history": get_employee_work_history(a.employee),
+                }
+                for a in applications
+            ]
+        except Exception:
+            count = 0
+            applicants = []
+        open_jobs.append({
+            "job_id": job.id,
+            "job_title": job.title,
+            "applicant_count": count,
+            "applicants": applicants,
+        })
+    return Response({"hired_workers": hired, "open_jobs_with_applicants": open_jobs})
+
+
+# ==================== JOB APPLICANTS ====================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def job_applicants(request, job_id):
+    """List applicants for a job (employer only)."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if job_listing.employer != request.user:
+        return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
+    applications = JobApplication.objects.filter(job_listing=job_listing, status='pending').select_related('employee')
+    serializer = JobApplicationSerializer(applications, many=True)
+    data = list(serializer.data)
+    for i, app in enumerate(applications):
+        data[i]["work_history"] = get_employee_work_history(app.employee)
+    return Response(data)
+
+
+# ==================== INITIATE PAYSTACK (DEPOSIT) ====================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def initiate_paystack(request, job_id):
+    """Return Paystack ref and amount for frontend to open Paystack widget. Employer funds escrow."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if job_listing.employer != request.user:
+        return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
+    escrow = get_object_or_404(EscrowContract, job_listing=job_listing)
+    contract_id = escrow.contract_id or job_listing.escrow_contract_id
+    if not contract_id:
+        return Response({"error": "No escrow contract"}, status=status.HTTP_400_BAD_REQUEST)
+    amount = float(escrow.amount)
+    amount_kobo = int(round(amount * 100))
+    email = request.user.email or (request.user.phone_number + '@trustwork.placeholder')
+    return Response({
+        "reference": contract_id,
+        "amount_kobo": amount_kobo,
+        "amount_kes": amount,
+        "currency": "KES",
+        "email": email,
+        "job_id": job_listing.id,
+        "job_title": job_listing.title,
+    })
+
+
+# ==================== JOB ESCROW INFO ====================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def job_escrow(request, job_id):
+    """Escrow balance and status for a job (employer or assigned worker)."""
+    job_listing = get_object_or_404(JobListing, pk=job_id)
+    if job_listing.employer != request.user and job_listing.employee != request.user:
+        return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        escrow = EscrowContract.objects.get(job_listing=job_listing)
+    except EscrowContract.DoesNotExist:
+        return Response({
+            "job_id": job_id,
+            "job_title": getattr(job_listing, 'title', ''),
+            "contract_id": "",
+            "amount_held": "0",
+            "amount_held_kes": "0",
+            "amount_held_xlm": "0",
+            "status": "pending_deposit",
+            "funded_at": None,
+            "released_at": None,
+            "when_release": None,
+        })
+    amount = str(escrow.amount)
+    return Response({
+        "job_id": job_id,
+        "job_title": job_listing.title,
+        "contract_id": escrow.contract_id,
+        "amount_held": amount,
+        "amount_held_kes": amount,
+        "amount_held_xlm": amount,
+        "status": escrow.status,
+        "funded_at": escrow.funded_at.isoformat() if escrow.funded_at else None,
+        "released_at": escrow.released_at.isoformat() if escrow.released_at else None,
+        "when_release": "When employer marks work done" if escrow.status == "funded" else (escrow.released_at.isoformat() if escrow.released_at else None),
+    })
+
+
+# ==================== TRANSACTIONS HISTORY ====================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def transactions(request):
+    """List deposits and payouts for current user."""
+    user = request.user
+    out = []
+    if user.user_type == 'employer':
+        for ec in EscrowContract.objects.filter(employer=user).select_related('job_listing'):
+            job = ec.job_listing
+            for dep in MpesaDeposit.objects.filter(escrow_contract=ec):
+                out.append({
+                    "type": "deposit",
+                    "id": dep.id,
+                    "job_id": job.id,
+                    "job_title": job.title,
+                    "amount": str(dep.amount),
+                    "currency": "KES",
+                    "reference": dep.transaction_reference,
+                    "status": dep.status,
+                    "created_at": dep.created_at.isoformat(),
+                    "completed_at": dep.completed_at.isoformat() if dep.completed_at else None,
+                })
+            for dep in PaystackDeposit.objects.filter(escrow_contract=ec):
+                    out.append({
+                        "type": "deposit",
+                        "id": dep.id,
+                        "job_id": job.id,
+                        "job_title": job.title,
+                        "amount": str(dep.amount),
+                        "currency": dep.currency,
+                        "reference": dep.transaction_reference,
+                        "status": dep.status,
+                        "created_at": dep.created_at.isoformat(),
+                        "completed_at": dep.completed_at.isoformat() if dep.completed_at else None,
+                    })
+    if user.user_type == 'employee':
+        for payout in MobileMoneyPayout.objects.filter(employee=user).select_related('escrow_contract'):
+            ec = payout.escrow_contract
+            job = ec.job_listing
+            out.append({
+                "type": "payout",
+                "id": payout.id,
+                "job_id": job.id,
+                "job_title": job.title,
+                "amount": str(payout.amount),
+                "currency": "KES",
+                "reference": payout.transaction_reference or "",
+                "status": payout.status,
+                "created_at": payout.created_at.isoformat(),
+                "completed_at": payout.completed_at.isoformat() if payout.completed_at else None,
+            })
+    out.sort(key=lambda x: x['created_at'], reverse=True)
+    return Response(out)
+
+
 # ==================== HELPER FUNCTIONS ====================
 
 def release_stellar_escrow(escrow_contract):
@@ -520,8 +1012,8 @@ def release_stellar_escrow(escrow_contract):
         employee_account = escrow_contract.employee.stellar_account_id if escrow_contract.employee else None
         
         if not employee_account:
-            logger.error(f"No Stellar account for employee: {escrow_contract.employee}")
-            return False
+            logger.warning(f"No Stellar account for employee; skipping on-chain release, payout via mobile money only")
+            return True  # Still allow mobile money payout
         
         # Release escrow funds
         success = stellar_client.release_escrow_contract(

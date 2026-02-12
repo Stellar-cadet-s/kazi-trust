@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { MapPin, DollarSign } from 'lucide-react';
+import { DollarSign } from 'lucide-react';
 import { PageHeader } from '@/components/layout';
 import { Card, Input, Badge, Button } from '@/components/ui';
-import { jobService } from '@/services/api';
+import { jobService, employeeService } from '@/services/api';
 import { getToken, getUser } from '@/lib/auth';
 import type { JobListing } from '@/types';
 
@@ -16,15 +16,32 @@ export default function BrowseJobsPage() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [applyingId, setApplyingId] = useState<number | null>(null);
+  const [withdrawingId, setWithdrawingId] = useState<number | null>(null);
+  const [appliedIds, setAppliedIds] = useState<Set<number>>(new Set());
+  const [pendingJobIds, setPendingJobIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (!getToken()) {
       router.push('/auth/login');
       return;
     }
-    jobService
-      .list()
-      .then((list) => setJobs(Array.isArray(list) ? list : []))
+    const user = getUser();
+    if (user?.user_type !== 'employee') {
+      router.push('/employer/dashboard');
+      return;
+    }
+    Promise.all([jobService.list(), employeeService.myApplications().catch(() => [])])
+      .then(([list, applications]) => {
+        setJobs(Array.isArray(list) ? list : []);
+        const ids = new Set<number>();
+        const pending = new Set<number>();
+        (applications || []).forEach((a: { job_id: number; status: string }) => {
+          ids.add(a.job_id);
+          if (a.status === 'pending') pending.add(a.job_id);
+        });
+        setAppliedIds(ids);
+        setPendingJobIds(pending);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load jobs'))
       .finally(() => setLoading(false));
   }, [router]);
@@ -44,14 +61,35 @@ export default function BrowseJobsPage() {
     setApplyingId(jobId);
     setError('');
     try {
-      await jobService.update(jobId, { employee_id: user.id });
-      setJobs((prev) =>
-        prev.map((j) => (j.id === jobId ? { ...j, status: 'assigned' as const, employee: user.id } : j))
-      );
+      await jobService.apply(jobId);
+      setAppliedIds((prev) => new Set(prev).add(jobId));
+      setPendingJobIds((prev) => new Set(prev).add(jobId));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply');
     } finally {
       setApplyingId(null);
+    }
+  };
+
+  const handleWithdraw = async (jobId: number) => {
+    setWithdrawingId(jobId);
+    setError('');
+    try {
+      await jobService.withdrawApplication(jobId);
+      setAppliedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
+      setPendingJobIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to withdraw');
+    } finally {
+      setWithdrawingId(null);
     }
   };
 
@@ -114,13 +152,30 @@ export default function BrowseJobsPage() {
                   </div>
                 </div>
 
-                <Button
-                  variant="primary"
-                  onClick={() => handleApply(job.id)}
-                  disabled={applyingId === job.id}
-                >
-                  {applyingId === job.id ? 'Applying...' : 'Apply'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {appliedIds.has(job.id) ? (
+                    <>
+                      <span className="text-sm text-gray-500">Applied</span>
+                      {pendingJobIds.has(job.id) && (
+                        <Button
+                          variant="outline"
+                          onClick={() => handleWithdraw(job.id)}
+                          disabled={withdrawingId === job.id}
+                        >
+                          {withdrawingId === job.id ? 'Withdrawing...' : 'Withdraw'}
+                        </Button>
+                      )}
+                    </>
+                  ) : (
+                    <Button
+                      variant="primary"
+                      onClick={() => handleApply(job.id)}
+                      disabled={applyingId === job.id}
+                    >
+                      {applyingId === job.id ? 'Applying...' : 'Apply'}
+                    </Button>
+                  )}
+                </div>
               </div>
             </Card>
           ))

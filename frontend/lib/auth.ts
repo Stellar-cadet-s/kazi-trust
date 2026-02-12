@@ -6,12 +6,12 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function getUser(): { id: number; user_type: string; first_name?: string; last_name?: string; email?: string | null } | null {
+export function getUser(): { id: number; user_type: string; first_name?: string; last_name?: string; email?: string | null; phone_number?: string | null } | null {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as { id: number; user_type: string; first_name?: string; last_name?: string; email?: string | null };
+    return JSON.parse(raw) as { id: number; user_type: string; first_name?: string; last_name?: string; email?: string | null; phone_number?: string | null };
   } catch {
     return null;
   }

@@ -1,11 +1,15 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Briefcase, BookOpen, LogOut } from 'lucide-react';
+import { LayoutDashboard, Briefcase, BookOpen, LogOut, History, Award, GraduationCap } from 'lucide-react';
 import { Sidebar } from '@/components/layout';
+import { ChatWidget } from '@/components/ChatWidget';
 
 const workerNav = [
   { href: '/worker/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
   { href: '/worker/browse', label: 'Browse Jobs', icon: <Briefcase size={20} /> },
+  { href: '/worker/work-history', label: 'My work history', icon: <Award size={20} /> },
+  { href: '/worker/financial-literacy', label: 'Financial literacy', icon: <GraduationCap size={20} /> },
+  { href: '/worker/transactions', label: 'Transactions', icon: <History size={20} /> },
   { href: '/worker/rights', label: 'Know Your Rights', icon: <BookOpen size={20} /> },
 ];
 
@@ -25,6 +29,7 @@ export default function WorkerLayout({ children }: { children: ReactNode }) {
         </div>
       </div>
       <main className="flex-1 p-8">{children}</main>
+      <ChatWidget />
     </div>
   );
 }

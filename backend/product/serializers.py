@@ -1,7 +1,7 @@
 # serializers.py
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import CustomUser as User, JobListing, EscrowContract
+from .models import CustomUser as User, JobListing, EscrowContract, JobApplication
 
 class EmailPasswordLoginSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
@@ -64,13 +64,32 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 class JobListingSerializer(serializers.ModelSerializer):
     employer_name = serializers.CharField(source='employer.get_full_name', read_only=True)
+    employee_name = serializers.SerializerMethodField()
+    employee_phone = serializers.SerializerMethodField()
     
     class Meta:
         model = JobListing
         fields = ('id', 'title', 'description', 'budget', 'status', 'employer', 'employer_name', 
-                  'employee', 'created_at', 'updated_at', 'assigned_at', 'completed_at', 'escrow_contract_id')
+                  'employee', 'employee_name', 'employee_phone', 'created_at', 'updated_at', 'assigned_at', 'completed_at', 'escrow_contract_id')
         read_only_fields = ('id', 'employer', 'status', 'created_at', 'updated_at', 
                           'assigned_at', 'completed_at', 'escrow_contract_id')
+    
+    def get_employee_name(self, obj):
+        return obj.employee.get_full_name() if obj.employee else None
+    
+    def get_employee_phone(self, obj):
+        return obj.employee.phone_number if obj.employee else None
+
+
+class JobApplicationSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.get_full_name', read_only=True)
+    employee_phone = serializers.CharField(source='employee.phone_number', read_only=True)
+    employee_email = serializers.EmailField(source='employee.email', read_only=True)
+    
+    class Meta:
+        model = JobApplication
+        fields = ('id', 'job_listing', 'employee', 'employee_name', 'employee_phone', 'employee_email', 'status', 'created_at')
+        read_only_fields = ('id', 'created_at')
 
 class JobListingCreateSerializer(serializers.ModelSerializer):
     class Meta:

@@ -1,16 +1,4 @@
-"""
-Stellar escrow Python client – hold, deposit, withdraw (release).
 
-Works with the Kazi Soroban escrow contract (Rust):
-- create(escrow_id, employer, asset) → hold
-- deposit(escrow_id, from, amount) → deposit
-- set_beneficiary(escrow_id, employee) → assign
-- release(escrow_id) → withdraw to employee
-- balance(escrow_id) → current held amount
-
-When STELLAR_ESCROW_CONTRACT_ID and STELLAR_ESCROW_ADMIN_SECRET are not set,
-operations no-op and return success (local/dev mode).
-"""
 
 import logging
 from typing import Optional, Dict, Any

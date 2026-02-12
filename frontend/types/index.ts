@@ -23,6 +23,8 @@ export interface JobListing {
   employer: number;
   employer_name?: string;
   employee: number | null;
+  employee_name?: string | null;
+  employee_phone?: string | null;
   created_at: string;
   updated_at: string;
   assigned_at: string | null;
